@@ -1,4 +1,4 @@
-module github.com/balena-os/librsync-go
+module github.com/unity-genesis/librsync-go
 
 require (
 	github.com/balena-os/circbuf v0.0.0-20171122095043-56e73111d0b2
