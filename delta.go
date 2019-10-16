@@ -83,6 +83,7 @@ func Delta(sig *SignatureType, i io.Reader, output io.Writer) error {
 
 func DeltaR(sigIn io.Reader, i io.Reader, out io.Writer) error {
 	ret := SignatureType{}
+	ret.weak2block = make(map[uint32]int)
 	if err := binary.Read(sigIn, binary.BigEndian, &ret.sigType); err != nil {
 		return err
 	}
