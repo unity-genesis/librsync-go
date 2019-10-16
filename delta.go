@@ -4,9 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
-	"io"
-
 	"github.com/balena-os/circbuf"
+	"io"
 )
 
 func Delta(sig *SignatureType, i io.Reader, output io.Writer) error {
@@ -81,3 +80,34 @@ func Delta(sig *SignatureType, i io.Reader, output io.Writer) error {
 
 	return binary.Write(output, binary.BigEndian, OP_END)
 }
+
+func DeltaR(sigIn io.Reader, i io.Reader, out io.Writer) error {
+	ret := SignatureType{}
+	if err := binary.Read(sigIn, binary.BigEndian, &ret.sigType); err != nil {
+		return err
+	}
+	if err := binary.Read(sigIn, binary.BigEndian, &ret.blockLen); err != nil {
+		return err
+	}
+	if err := binary.Read(sigIn, binary.BigEndian, &ret.strongLen); err != nil {
+		return err
+	}
+
+	block := make([]byte, ret.strongLen)
+	var weak uint32
+	for {
+		if err := binary.Read(sigIn, binary.BigEndian, &weak); err == io.ErrUnexpectedEOF || err == io.EOF {
+			break
+		} else if err != nil {
+			return err
+		}
+		if _, err := sigIn.Read(block); err != nil {
+			return err
+		}
+		ret.weak2block[weak] = len(ret.strongSigs)
+		ret.strongSigs = append(ret.strongSigs, block)
+	}
+
+	return Delta(&ret, i, out)
+}
+
