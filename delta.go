@@ -4,64 +4,60 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
-	"github.com/balena-os/circbuf"
 	"io"
+
+	"github.com/balena-os/circbuf"
 )
 
 func Delta(sig *SignatureType, i io.Reader, output io.Writer) error {
 	input := bufio.NewReader(i)
 
-	err := binary.Write(output, binary.BigEndian, DELTA_MAGIC)
-	if err != nil {
+	if err := binary.Write(output, binary.BigEndian, DELTA_MAGIC); err != nil {
 		return err
 	}
 
-	prevByte := byte(0)
 	m := match{output: output}
-
 	weakSum := NewRollsum()
 	block, _ := circbuf.NewBuffer(int64(sig.blockLen))
-	pos := 0
 
+	buf := make([]byte, sig.blockLen)
+	if len, err := input.Read(buf); err != nil {
+		return err
+	} else {
+		block.Write(buf[:len])
+		weakSum.Update(buf[:len])
+	}
+
+	pos := 0
 	for {
 		pos += 1
-		in, err := input.ReadByte()
-		if err == io.EOF {
-			break
-		} else if err != nil {
-			return err
-		}
-
-		if block.TotalWritten() > 0 {
-			prevByte, err = block.Get(0)
-			if err != nil {
-				return err
-			}
-		}
-		block.WriteByte(in)
-		weakSum.Rollin(in)
-
-		if weakSum.count < uint64(sig.blockLen) {
-			continue
-		}
-
-		if weakSum.count > uint64(sig.blockLen) {
-			err := m.add(MATCH_KIND_LITERAL, uint64(prevByte), 1)
-			if err != nil {
-				return err
-			}
-			weakSum.Rollout(prevByte)
-		}
-
 		if blockIdx, ok := sig.weak2block[weakSum.Digest()]; ok {
 			strong2, _ := CalcStrongSum(block.Bytes(), sig.sigType, sig.strongLen)
 			if bytes.Equal(sig.strongSigs[blockIdx], strong2) {
 				weakSum.Reset()
 				block.Reset()
-				err := m.add(MATCH_KIND_COPY, uint64(blockIdx)*uint64(sig.blockLen), uint64(sig.blockLen))
-				if err != nil {
+				if err := m.add(MATCH_KIND_COPY, uint64(blockIdx)*uint64(sig.blockLen), uint64(sig.blockLen)); err != nil {
 					return err
 				}
+				if len, err := input.Read(buf); err != nil {
+					return err
+				} else {
+					block.Write(buf[:len])
+					weakSum.Update(buf[:len])
+				}
+			}
+		} else {
+			in , err := input.ReadByte()
+			if err == io.EOF {
+				break
+			} else if err != nil {
+				return err
+			}
+			head, _ := block.Get(0)
+			weakSum.Rotate(head, in)
+			block.WriteByte(in)
+			if err := m.add(MATCH_KIND_LITERAL, uint64(head), 1); err != nil {
+				return err
 			}
 		}
 	}
@@ -93,7 +89,6 @@ func DeltaR(sigIn io.Reader, i io.Reader, out io.Writer) error {
 		return err
 	}
 
-	block := make([]byte, ret.strongLen)
 	var weak uint32
 	for {
 		if err := binary.Read(sigIn, binary.BigEndian, &weak); err == io.ErrUnexpectedEOF || err == io.EOF {
@@ -101,6 +96,7 @@ func DeltaR(sigIn io.Reader, i io.Reader, out io.Writer) error {
 		} else if err != nil {
 			return err
 		}
+		block := make([]byte, ret.strongLen)
 		if _, err := sigIn.Read(block); err != nil {
 			return err
 		}
