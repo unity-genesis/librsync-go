@@ -1,67 +1,68 @@
 package librsync
 
 import (
-	"bufio"
+	//"bufio"
 	"bytes"
 	"encoding/binary"
 	"github.com/balena-os/circbuf"
 	"io"
 )
 
-func Delta(sig *SignatureType, i io.Reader, output io.Writer) error {
-	input := bufio.NewReader(i)
+func Delta(sig *SignatureType, input io.Reader, output io.Writer) error {
 
-	err := binary.Write(output, binary.BigEndian, DELTA_MAGIC)
-	if err != nil {
+	if err := binary.Write(output, binary.BigEndian, DELTA_MAGIC); err != nil {
 		return err
 	}
 
-	prevByte := byte(0)
 	m := match{output: output}
-
 	weakSum := NewRollsum()
 	block, _ := circbuf.NewBuffer(int64(sig.blockLen))
-	pos := 0
 
+	lbuf := make([]byte, sig.blockLen)
+	sbuf := make([]byte, 1)
+	if len, err := input.Read(lbuf); err != nil {
+		return err
+	} else {
+		block.Write(lbuf[:len])
+		weakSum.Update(lbuf[:len])
+	}
+	pos := 0
 	for {
 		pos += 1
-		in, err := input.ReadByte()
-		if err == io.EOF {
-			break
-		} else if err != nil {
-			return err
-		}
 
-		if block.TotalWritten() > 0 {
-			prevByte, err = block.Get(0)
-			if err != nil {
-				return err
-			}
-		}
-		block.WriteByte(in)
-		weakSum.Rollin(in)
-
-		if weakSum.count < uint64(sig.blockLen) {
-			continue
-		}
-
-		if weakSum.count > uint64(sig.blockLen) {
-			err := m.add(MATCH_KIND_LITERAL, uint64(prevByte), 1)
-			if err != nil {
-				return err
-			}
-			weakSum.Rollout(prevByte)
-		}
-
-		if blockIdx, ok := sig.weak2block[weakSum.Digest()]; ok {
-			strong2, _ := CalcStrongSum(block.Bytes(), sig.sigType, sig.strongLen)
+		tb := block.Bytes()
+		tsum := weakSum.Digest()
+		matched := false
+		if blockIdx, ok := sig.weak2block[tsum]; ok {
+			strong2, _ := CalcStrongSum(tb, sig.sigType, sig.strongLen)
 			if bytes.Equal(sig.strongSigs[blockIdx], strong2) {
-				weakSum.Reset()
-				block.Reset()
-				err := m.add(MATCH_KIND_COPY, uint64(blockIdx)*uint64(sig.blockLen), uint64(sig.blockLen))
-				if err != nil {
+				matched = true
+				if err := m.add(MATCH_KIND_COPY, uint64(blockIdx)*uint64(sig.blockLen), uint64(sig.blockLen)); err != nil {
 					return err
 				}
+				tbuf := make([]byte, sig.blockLen)
+				if len, err := input.Read(tbuf); err != nil {
+					return err
+				} else {
+					weakSum.Reset()
+					block.Reset()
+					block.Write(tbuf[:len])
+					weakSum.Update(tbuf[:len])
+				}
+			}
+		}
+		if !matched {
+			_ , err := input.Read(sbuf)
+			if err == io.EOF {
+				break
+			} else if err != nil {
+				return err
+			}
+			head, _ := block.Get(0)
+			weakSum.Rotate(head, sbuf[0])
+			block.WriteByte(sbuf[0])
+			if err := m.add(MATCH_KIND_LITERAL, uint64(head), 1); err != nil {
+				return err
 			}
 		}
 	}
@@ -82,7 +83,7 @@ func Delta(sig *SignatureType, i io.Reader, output io.Writer) error {
 
 func DeltaR(sigIn io.Reader, i io.Reader, out io.Writer) error {
 	ret := SignatureType{}
-	ret.weak2block = make(map[uint32]int)
+	ret.weak2block = make(map[int32]int)
 	if err := binary.Read(sigIn, binary.BigEndian, &ret.sigType); err != nil {
 		return err
 	}
@@ -93,9 +94,9 @@ func DeltaR(sigIn io.Reader, i io.Reader, out io.Writer) error {
 		return err
 	}
 
-	block := make([]byte, ret.strongLen)
-	var weak uint32
+	var weak int32
 	for {
+		block := make([]byte, ret.strongLen)
 		if err := binary.Read(sigIn, binary.BigEndian, &weak); err == io.ErrUnexpectedEOF || err == io.EOF {
 			break
 		} else if err != nil {
