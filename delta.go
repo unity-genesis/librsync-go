@@ -4,6 +4,7 @@ import (
 	//"bufio"
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"github.com/balena-os/circbuf"
 	"io"
 )
@@ -25,8 +26,10 @@ func Delta(sig *SignatureType, input io.Reader, output io.Writer) error {
 	} else {
 		block.Write(lbuf[:len])
 		weakSum.Update(lbuf[:len])
+		fmt.Println(weakSum.Digest())
 	}
 	pos := 0
+	matchcount := 0
 	for {
 		pos += 1
 
@@ -37,6 +40,7 @@ func Delta(sig *SignatureType, input io.Reader, output io.Writer) error {
 			strong2, _ := CalcStrongSum(tb, sig.sigType, sig.strongLen)
 			if bytes.Equal(sig.strongSigs[blockIdx], strong2) {
 				matched = true
+				matchcount += 1
 				if err := m.add(MATCH_KIND_COPY, uint64(blockIdx)*uint64(sig.blockLen), uint64(sig.blockLen)); err != nil {
 					return err
 				}
@@ -66,6 +70,7 @@ func Delta(sig *SignatureType, input io.Reader, output io.Writer) error {
 			}
 		}
 	}
+	fmt.Println(matchcount)
 
 	for _, b := range block.Bytes() {
 		err := m.add(MATCH_KIND_LITERAL, uint64(b), 1)
